@@ -1,5 +1,6 @@
 const { client, connectToMongo } = require('./db');
 const nodemailer = require('nodemailer');
+const twilio = require('twilio');
 require('dotenv').config();
 
 const transporter = nodemailer.createTransport({
@@ -10,21 +11,24 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Twilio SMS client setup
+const twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// Function to send an email 
 const sendStatusEmail = async (order, status) => {
-  // Email content customization based on status
   let subject, heading, statusMessage, statusColor, emoji;
-  
+
   if (status === 'Accepted') {
     subject = `BiteSpeed: Your order has been accepted! 🎉`;
     heading = `Thanks for your order!`;
     statusMessage = `Your order for <strong>${order.itemName}</strong> has been <span style="color:#FF6B00;"><strong>accepted</strong></span> and is being prepared for you.`;
-    statusColor = '#FF6B00'; // BiteSpeed orange
+    statusColor = '#FF6B00';
     emoji = '✅';
   } else if (status === 'Delivered') {
     subject = `BiteSpeed: Your order has been delivered! 🎉`;
     heading = `Enjoy your meal!`;
     statusMessage = `Your order for <strong>${order.itemName}</strong> has been <span style="color:#FF6B00;"><strong>delivered</strong></span>. We hope you enjoy it!`;
-    statusColor = '#FF6B00'; // BiteSpeed orange
+    statusColor = '#FF6B00';
     emoji = '🛵';
   }
 
@@ -69,13 +73,35 @@ const sendStatusEmail = async (order, status) => {
   }
 };
 
+// Function to send SMS via Twilio
+const sendStatusSMS = async (order, status) => {
+  let messageBody;
+
+  if (status === 'Accepted') {
+    messageBody = `Your order for ${order.itemName} has been accepted and is being prepared for you. - BiteSpeed`;
+  } else if (status === 'Delivered') {
+    messageBody = `Your order for ${order.itemName} has been delivered! Enjoy your meal. - BiteSpeed`;
+  }
+
+  try {
+    const message = await twilioClient.messages.create({
+      body: messageBody,
+      from: process.env.TWILIO_PHONE_NUMBER,  
+      to: order.phone || 'fallbackPhoneNumber', 
+    });
+    console.log(`✅ ${status} SMS sent to ${order.customerName}: ${message.sid}`);
+  } catch (err) {
+    console.error(`❌ ${status} SMS failed:`, err.message);
+  }
+};
+
+// Watching for order status changes
 const watchOrderChanges = async () => {
   const db = await connectToMongo();
   const orders = db.collection('orders');
 
   console.log('👀 Watching for status updates in orders...');
 
-  // Watch for both "Accepted" and "Delivered" status changes
   const changeStream = orders.watch([
     {
       $match: {
@@ -95,6 +121,7 @@ const watchOrderChanges = async () => {
       const newStatus = updatedOrder.status;
       if (newStatus === 'Accepted' || newStatus === 'Delivered') {
         await sendStatusEmail(updatedOrder, newStatus);
+        await sendStatusSMS(updatedOrder, newStatus);
       }
     }
   });
